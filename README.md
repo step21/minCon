@@ -1,1 +1,1 @@
-# licNL
+# minCon
