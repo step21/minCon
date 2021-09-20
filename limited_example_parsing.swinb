@@ -1,0 +1,351 @@
+<div class="notebook">
+
+<div class="nb-cell markdown" name="md2">
+# Minimal Contract Language | minCon
+
+The following describes first developments of minCon, as separate parts. More work would likely be needed to integrate them, but in any case before it works on a full document or has better debugging output, for debugging purposes and for the interested reader to verify and test, separate parts are much more practical. This is because if for example the full document is tested, but there is an error in sentence 10, even with thoughtful use of breakpoints and the trace functionality, reaching a problematic section can take quite some time.
+The work on minCon was inspired by Lexon, Logical English and other similar projects, but is more restricted and not compatible with any of them.
+
+## Certain Restrictions
+
+&gt; This list is probably incomplete
+
+### Temporary
+* For now, separate parts are put separately that would normal be combined, as to save time on debugging integration errors.
+* A structure for putting together a solidity file from a parse tree exists, but it might be incomplete and it is untested as this would need a complete parse tree or manual work.
+
+### Language or Example Restrictions
+* Most sentences have to follow a simple `subject, verb, object` pattern. This could easily be extended to allow for more complicated constructions, but for now this is a hard limit to limit the scope for this work.
+* No relative clauses / commas – adds verbosity and feels less natural but simplifies parsing a lot.
+* For now, variables are not allowed to have spaces. (will change later)
+* Once Solidity code is generated, no security guarantees are made.
+
+### Important
+* It is important to know whether you are working with character codes or strings. As this is used in many places and is probably more accurate, current prolog developers seem to recommend this. But, especially during the tokenizing phase, this can be quite confusing, as evident below where `X` is often the text content, and this is displayed as character codes.
+</div>
+
+<div class="nb-cell markdown" name="md3">
+### Tokenizer
+
+The code below is code for a specialized tokenizer. It is currently not used in the further steps, as due to time constraints for now the existing tokenizer module was used as it suits most requirements. In the future, it could make later parsing more straightforward, by for example already tagging use of variables during tokenizing.
+</div>
+
+<div class="nb-cell program" data-background="true" name="p1">
+% Custom tokenizer. Inspired by tokenize module by Anne Ogborn and Shon Feder for learning and the basics.
+:- set_prolog_flag(back_quotes, codes).
+:- use_module(library(dcg/basics)).
+
+% test with : tokenizeT(Text, Tokens). (loads testtext from below)
+
+tokenizeT(Text, Tokens) :-
+    testfile(Text), phrase(tokens(Tokens), Text).
+
+tokgram(T) --&gt; tokens(T).
+tokens(T) --&gt; token(T), eos, !.
+tokens([Th|Tt]) --&gt; token(Th), tokens(Tt).
+token(W) --&gt; word(W), eos, !.
+token(W), P --&gt; word(W), fst(P). %
+token(W), ` ` --&gt; word(W), ` `.
+token(W), C --&gt;  word(W), (punct(C) ; cntrl(C) ; nasciis(C)).
+token(T) --&gt; space(T) ; hsep(T) ; comma(T), end(T) ; variable(T) ; number(T).
+token(P) --&gt; punct(P) ; cntrl(P).
+
+hsep(T) --&gt; ":", {T = hsep(":")}.
+fst(T) --&gt; ".", {T = fst(".")}.
+comma([T]) --&gt; ",", {T = comma((,))}.
+space(T) --&gt; " ", {T = space}.
+end(T) --&gt; "\n", {T = end(end)}.
+variable(V) --&gt; string(`"`, `"`, V).
+
+% nasciis, space/punct and escape were mostly copied as they are used by other parts.
+% should be possible to remove at some point though
+% non ascii's
+nasciis([C])     --&gt; nascii(C), eos, !.
+nasciis([C]),[D] --&gt; nascii(C), [D], {D &lt; 127}.
+nasciis([C|Cs])  --&gt; nascii(C), nasciis(Cs).
+nascii(C)        --&gt; [C], {C &gt; 127}.
+%space --&gt; [S], {code_type(S, white)}.
+punct([P]) --&gt; [P], {code_type(P, punct)}.
+cntrl([C]) --&gt; [C], {code_type(C, cntrl)}.
+' ' --&gt; space.
+' ' --&gt; space, ' '.
+
+% This is similar to csyms used in tokenize but was adapted
+word(W) --&gt; chars(Cl), {string_codes(W, Cl)}.
+chars([C]) --&gt; char(C).
+chars([Wh|Wt]) --&gt; char(Wh), chars(Wt).
+char(C) --&gt; [C], {code_type(C, csym)}.
+
+% the strings part was copied from tokenize module as it does exactly what was required.
+% maybe it could be reduced to be less similar
+string(OpenBracket, CloseBracket, S) --&gt; string_start(OpenBracket, CloseBracket, S).
+
+% A string starts when we encounter an OpenBracket
+string_start(OpenBracket, CloseBracket, Cs) --&gt;
+    OpenBracket, string_content(OpenBracket, CloseBracket, Cs).
+
+% String content is everything up until we hit a CloseBracket
+string_content(_OpenBracket, CloseBracket, []) --&gt; CloseBracket, !.
+% Part about string content unitl close bracket before escape removed
+% String content includes any character that isn't a CloseBracket or an escape.
+string_content(OpenBracket, CloseBracket, [C|Cs]) --&gt;
+    [C],
+    {[C] \= CloseBracket},
+    string_content(OpenBracket, CloseBracket, Cs).
+
+</div>
+
+<div class="nb-cell markdown" name="md4">
+### Medium Length Example
+
+This is a medium length example, limited to header, terms, contracts and one clause. It is used in some examples below where it is referenced by `testfile`. For the more detailed examples it was not used, as. debugging got then very difficult.
+</div>
+
+<div class="nb-cell program" data-background="true" name="p3">
+testfile(`NAME: Evaluation License System.
+VERSION: 1
+AUTHOR: FLORIAN IDELBERGER
+PREAMBLE: This is a licensing contract for a software evaluation.
+TERMS:
+"Licensor" is a person.
+"Arbiter" is a person.
+"License" is this contract.
+"Licensing Fee" is an amount.
+"Breach Fee" is an amount.
+The Licensor appoints the Arbiter.
+The Licensor fixes the Licensing Fee.
+The Licensor fixes the Breach Fee.
+
+CONTRACTS per Licensee:
+"Description of Goods" is a text.
+"Licensee" is a person.
+"Paid" is a binary.
+The Licensor fixes the Description of Goods.
+CLAUSE: Pay
+The Licensee pays the Licensing Fee to the Licensor,
+and pays the Breach Fee into escrow.
+The License is therefore Paid.`).
+</div>
+
+<div class="nb-cell markdown" name="md5">
+The query below just tokenizes the above text. It is a lot of output, but it can show what kind of tokens are generated and how/if the text from above ends up in the corresponding variable.
+</div>
+
+<div class="nb-cell query" name="q1">
+testfile(Text), tokenize(Text, Tokens).
+</div>
+
+<div class="nb-cell markdown" name="md6">
+### Section Parsing
+
+During the testing, research and development of different approaches to tokenizing, parsing and usage of DCGs in general, it became apparent that at least for my Prolog skills at the time, a top down approch with trying to define everything from the top down at once proved very difficult to me. This would be more easily possible, if it was iterated step by step, starting at the top without details, then breaking things down further bit by bit. To this end, this next code at first just parses sections, and then their contents. The contents are parsed with a generic predicate matching any amount of list items until the next rule. Especially on more complicate grammars, this breaks down quickly, and is unspecific and not pretty, but it works well for relatively simple parts without needing a separate rule.
+
+&gt; TODO-NEXT: re-combine tokens of f.e. name to string
+
+</div>
+
+<div class="nb-cell program" data-background="true" name="p2">
+:- use_module(library(tokenize)).
+:- set_prolog_flag(back_quotes, codes).
+:- include(gvtree).
+
+main(D) :-
+    testfile(X), parseOne(X, D).
+
+lexing(Source, Tokens) :-
+    tokenize(Source, Tokens, [cased(false), spaces(false)]).
+
+parseOne(X, D) :-
+	lexing(X, T), phrase(doc(D), T).
+
+doc(D) --&gt; sections(S), {D = lexdoc(S)}.
+sections([Sh|St]) --&gt; section(Sh), sections(St).
+sections(_S) --&gt; [].
+section(St) --&gt; [word(name), punct((:))], list(R), {St = docname(R)}.
+section(St) --&gt; [word(version), punct((:))], list(R), {St = version(R)}.
+section(St) --&gt; [word(author), punct((:))], list(R), {St = auth(R)}.
+section(St) --&gt; [word(preamble), punct((:))], list(R), {St = pre(R)}.
+section(St) --&gt; [word(terms), punct((:))], list(R), {St = terms(R)}.
+section(St) --&gt; [word(contracts)], list(N), [punct((:))], list(R), {St = contracts(N, R)}.
+section(St) --&gt; [word(clause), punct((:))], list(R), {St = clause(R)}.
+
+list([]) --&gt; [].
+list([L|Ls]) --&gt; [L], list(Ls).
+
+</div>
+
+<div class="nb-cell markdown" name="md8">
+In the section above, there is a lexing predicate and a parsing predicate which are called by main/1. The sections are searched recursively, until none are left, defined by a keyword each and a `:`. The result of each section is then constructed into a compound term, as this makes it easier to construct and draw a nice tree. Alternatively dcg4pt by Falco Nogatz et al. could be used.
+This can then be queried like below, with the main/1 predicate creating the section tree, which is then displayed by graphiz. For use without the tree drawing predicate, it can be commented out with a `%` in front of it.
+In the tree below, sections, variables and all tokens from the first step are represented specifically, while other words are just referenced by `word(&lt;Wordname&gt;)`.
+</div>
+
+<div class="nb-cell query" name="q2">
+main(D), gvtree(D, T).
+</div>
+
+<div class="nb-cell markdown" name="md9">
+### Alternative Section Tree
+
+The code below takes the previous tree and puts it into new predicates. This was mainly done as an exercise to test the parsing of the tree structure, and to ease testing further parsing on just one section, without manually copying and supplying a tokenlist.
+</div>
+
+<div class="nb-cell program" data-background="true" name="p4">
+hh(L, V, A, P, T, CN, C, CC, PP) --&gt; lll(L), vvv(V), aaa(A), ppp(P), ttt(T), ccc(CN, C), clauses(CC), {PP = hh(L, V, A, P, T, CN, C, CC)}.
+lll(L) --&gt; [docname(L)].
+vvv(V) --&gt; [version(V)].
+aaa(A) --&gt; [auth(A)].
+ppp(P) --&gt; [pre(P)].
+ttt(T) --&gt; [terms(T)].
+ccc(CN, C) --&gt; [contracts(CN, C)].
+
+clauses([]) --&gt; []. % this is wrong but w/o it loops/exceeds stack.
+clauses(CH) --&gt; cclause(X), clauses(CC), {CH = [X|CC]}.
+cclause(X) --&gt; [clause(X)].
+
+parseTwo(Token2, Result) :-
+    arg(1, Token2, E), !, phrase(hh(L, V, A, P, T, CN, C, CC, PP), E).
+parsemain(L, V, A, P, T, CN, C, CC, PP) :-
+    testfile(X), parseOne(X, D), arg(1, D, E), !, phrase(hh(L, V, A, P, T, CN, C, CC, PP), E), !, gvtree(PP, TT).
+</div>
+
+<div class="nb-cell markdown" name="md10">
+The benefit descrived above can be seen below - all section are given as separate variables with corresponding tokenlists. For a complete application this might not be necessary - but it makes it much easier to evaluate at a glance if one part looks okay, as compared to the packed tree structure above.
+</div>
+
+<div class="nb-cell query" name="q3">
+% remove outer element
+%testfile(X), parseOne(X, D), arg(1, D, E), unpack(E).  %, gvtree(hh(L, V, A, P, T, CN, C, CC), T).
+testfile(X), parseOne(X, D), arg(1, D, E), !, phrase(hh(L, V, A, P, T, CN, C, CC, PP), E), !, gvtree(PP, TT).
+</div>
+
+<div class="nb-cell markdown" name="md11">
+### Intermediate Attempt
+
+For an intermediary result, the test text was reduced further, keeping just the header and two terms. The rules that this was tested with, were removed here. This is just kept for documentation or for potential future development, as for the most explicit parsing below, this was reduced further.
+</div>
+
+<div class="nb-cell program" name="p5">
+testmin(`NAME: Evaluation License System.
+VERSION: 1
+AUTHOR: FLORIAN IDELBERGER
+PREAMBLE: This is a licensing contract for a software evaluation.
+TERMS:
+"Licensor" is a person.
+The Licensor fixes the Breach Fee.`).
+testvar(`"Licensor" is a person.`).
+parsemin(L, V, A, P, T, CN, C, CC, PP) :-
+    testmin(X), parseOne(X, D), arg(1, D, E), !, phrase(hh(L, V, A, P, T, CN, C, CC, PP), E), !, gvtree(PP, TT).
+</div>
+
+<div class="nb-cell query" name="q5">
+parsemin(L, V, A, P, T, CN, C, CC, PP), selectchk(cntrl('\n'), T, T2), trace, phrase(termsparse(TP), T2), write(TP).
+</div>
+
+<div class="nb-cell markdown" name="md1">
+### Sentence parsing
+
+After many trials and errors, to make progress on the actual parsing of sentences, the test text was reduced further to two sentences, where the first defines a variable and a type, and the second specifies an action by the first. These were selected as they exemplify two common actions, the variable definition and the assignment of said variable. This simplified debugging with standard prolog tools immensely and quickly showed results.
+It should in principle also work for more than the two example terms/sentences, as sentences are parsed until none are left. 
+
+A major feature also is that the variables that are defined by `"X"` are properly kept track of and recognized when they are used elsewhere. This required a separate variable to pass state (in this case the state of the variables) around between rules. This is a key requirement for being a usable programming language.
+
+As a further temporary measure, breachfee was defined as a separate rule in a fixed way, as its definition was not included in the test sentences, but all sentences are dependent on each other and any extra sentences would have made debugging harder. In a more complete implementation, this crutch would be removed.
+</div>
+
+<div class="nb-cell program" name="p6">
+:- set_prolog_flag(back_quotes, codes).
+:- use_module(library(tokenize)).
+:- include(gvtree).
+%:- use_module(library(dcg/basics)).
+
+lexing(Source, Tokens) :-
+    tokenize(Source, Tokens, [cased(false), spaces(false)]).
+
+testvar(`"Licensor" is a person.
+The Licensor fixes the breachfee.
+`).
+sents([], Vars).
+sents([SentsH|SentsT], Vars) --&gt; sent(SentsH, Vars), sents(SentsT, Vars).
+sents([SentsH|SentsT], Vars) --&gt; sent(SentsH, Vars).
+sent(Sent, Vars) --&gt; subject(S, Vars), verb, object(VU, Vars), end, {Sent = sent(subject(S), verb, object(VU))}.
+article --&gt; [word(a)] ; [word(the)].
+subject(S, Vars) --&gt; vardefinition(S, Vars).
+subject(S, Vars) --&gt; article, variable_use(S, Vars).
+vardefinition(S, Vars) --&gt; {var(Vars)}, [string(S)], {Vars = [S]}.
+vardefinition(S, Vars) --&gt; {write(Vars), nonvar(Vars), duplicate_term(Vars, VarsN)}, [string(S)], {Vars = [S|VarsN]}.
+type(T, Vars) --&gt; (([word(binary)], {T = type(binary)}); ([word(person)], {T = type(person)})).
+
+% does not support spaces yet
+variable_use(VU, Vars) --&gt; [word(X)], {member(X, Vars), VU = varu(X)}.
+verb --&gt; ([word(is)] ; [word(fixes)]).
+end --&gt; [punct(('.')), cntrl('\n')].
+end --&gt; [punct(('.'))].
+object(T, Vars) --&gt; article, type(T, Vars).
+object(VU, Vars) --&gt; article, variable_use(VU, Vars).
+object(S, Vars) --&gt; article, fee(S, Vars).
+% this is only a crutch as breach fee is undefined in this example.
+% (also breached should be lower case, but somehow tokenize did not uncase it
+fee(F, Vars) --&gt; [word(breachfee)], {F = fee(breachfee, Vars)}.
+</div>
+
+<div class="nb-cell markdown" name="md12">
+### Sentence Tree
+Anyway, the query below will tokenize the above two sentences, and parse them with the grammar above.
+This defines sentences made up of one or more sentences, which are then made up of subject, verb and object. In this case there are only two verbs, parsed to the same action (as it is close enough to infer). The subject can either be a defintion of a variable, or the usage of a variable. In the former case, the object then defines its type as necessary for some possible target languages such as Solidity. In the latter case, it is defined how the value of a variable is set. In future versions it could also be set directly.
+
+In any case, this limited example also gives a nice, small parse tree of the sentences, where it is much more easily visible what is going on than if this was taken of the whole document.
+
+Please note: In the tree, `sent` is short for sentence, and `varu` is variable use.
+</div>
+
+<div class="nb-cell query" name="q6">
+testvar(X), lexing(X, T), phrase(sents(S, V), T), gvtree(S, Tree).
+</div>
+
+<div class="nb-cell markdown" name="md13">
+Further integration and extension is easily possible at this point. Ideally, the rules and length of the document should be extended slowly or always accompanied by a smaller testing document, as to keep  debugging time short. Alternatively, it is possible to include debugging options directly into a DCG grammar, but this is not simple or at least not explained in most books about Prolog (not even in 'Art of Prolog' which goes into quite some depth) and would necessitate further study.
+</div>
+
+<div class="nb-cell markdown" name="md7">
+# GraphizTree
+
+This part below is necessary for drawing trees based on parse trees. It should be pasted in a separate tab inside swish or in a separate file and is then included in the places where it is used via `:- include(gvtree).` - this code was helpfully provided by a prolog community member. &lt;check who&gt;
+</div>
+
+<div class="nb-cell program" name="p7">
+:- use_rendering(graphviz).
+
+tree(Compound, Root, Options0, Options) --&gt;
+    { compound(Compound), !,
+      atom_concat(n, Options0.id, Root),
+      compound_name_arguments(Compound, Name, Arguments),
+      format(string(Label), '~q', [Name]),
+      ID1 is Options0.id+1
+    },
+    [node(Root, [label=Label])],
+    children(Arguments, Root, Options0.put(id, ID1), Options).
+tree(Any, Leaf, Options0, Options) --&gt;
+    { atom_concat(n, Options0.id, Leaf),
+      ID1 is Options0.id+1,
+      any_label(Any, Label, Color),
+      Options = Options0.put(id, ID1)
+    },
+    [ node(Leaf, [label=Label, shape=none, fontcolor=Color]) ].
+
+any_label(Any, Label, red4) :-
+    var(Any), !, Label = Any.
+any_label(Any, Label, blue) :-
+    format(string(Label), '~p', [Any]).
+
+children([], _, Options, Options) --&gt; [].
+children([H|T], Parent, Options0, Options) --&gt;
+    [ Child -&gt; Parent ],
+    tree(H, Child, Options0, Options1),
+    children(T, Parent, Options1, Options).
+
+gvtree(Term, digraph([rankdir='BT',size=5|Statements])) :-
+    phrase(tree(Term, _, _{id:1}, _), Statements).
+</div>
+
+</div>
